@@ -1,0 +1,119 @@
+name: DemoPay - Auto Build APK & Release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - '*.zip'
+      - '.github/workflows/android-release.yml'
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Extract ZIP and Build APK
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # 1. Checkout Repository
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # 2. Setup Java
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # 3. Find ZIP File
+      - name: Find Source ZIP
+        id: zip
+        run: |
+          ZIP_FILE=$(find . -maxdepth 1 -name '*.zip' | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "No ZIP file found!"
+            exit 1
+          fi
+
+          echo "ZIP_PATH=$ZIP_FILE" >> $GITHUB_ENV
+
+      # 4. Extract ZIP
+      - name: Extract Android Project
+        run: |
+          mkdir -p "$RUNNER_TEMP/demopay"
+          unzip -q "$ZIP_PATH" -d "$RUNNER_TEMP/demopay"
+
+          SETUP_FILE=$(find "$RUNNER_TEMP/demopay" \
+            -name setup.sh -type f | head -n 1)
+
+          if [ -z "$SETUP_FILE" ]; then
+            echo "setup.sh not found!"
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$SETUP_FILE")
+          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
+
+      # 5. Setup Android Project
+      - name: Configure Android Project
+        run: |
+          cd "$PROJECT_DIR"
+          chmod +x setup.sh
+          bash setup.sh
+
+      # 6. Setup Gradle
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      # 7. Build APK
+      - name: Build Debug APK
+        run: |
+          cd "$PROJECT_DIR"
+          gradle assembleDebug --stacktrace
+
+      # 8. Rename APK
+      - name: Prepare APK
+        run: |
+          mkdir -p release-apk
+
+          find "$PROJECT_DIR/app/build/outputs/apk/debug" \
+            -name '*.apk' \
+            -exec cp {} release-apk/DemoPay.apk \;
+
+          test -f release-apk/DemoPay.apk
+
+      # 9. Upload APK Artifact
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: DemoPay-APK
+          path: release-apk/DemoPay.apk
+          retention-days: 30
+
+      # 10. Publish GitHub Release
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: demopay-build-${{ github.run_number }}
+          name: DemoPay APK Build ${{ github.run_number }}
+          body: |
+            ## DemoPay Android APK
+
+            Automatically generated APK.
+
+            Download DemoPay.apk from Assets below.
+
+            Note: This is an offline payment-flow demonstration.
+            It does not verify or confirm real bank transactions.
+          files: release-apk/DemoPay.apk
+          make_latest: true
